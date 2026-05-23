@@ -5,6 +5,7 @@ from .search import Search
 from .interfaces import Action
 from .node import Node
 
+
 class BFS(Search):
     """Solves search problem using BFS algorithm."""
 
@@ -17,8 +18,8 @@ class BFS(Search):
             return []
         frontier = deque([node])
         explored = set()
-    
-        while len(frontier) > 0:
+
+        while frontier:
             node = frontier.popleft()
             explored.add(node.state)
             for action in self.problem.actions_function.actions(node.state):
@@ -27,6 +28,5 @@ class BFS(Search):
                     if self.problem.goal_test.is_goal_state(child.state):
                         return self.solution(child)
                     frontier.append(child)
-                   
-        # this is the failure case (goal state is impossible to reach)
+
         return None

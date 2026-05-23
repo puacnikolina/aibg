@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Optional, Union
+
+# ─── Field Type Constants ──────────────────────────────────────────────────────
+FIELD_BASE         = 0
+FIELD_NORMAL       = 1
+FIELD_OBSTACLE_SLOW = 2  # Snow: +1 movement cost
+FIELD_OBSTACLE     = 3  # Ice Spikes: 10 DMG, impassable
+FIELD_POWERUP      = 4
+FIELD_WALL         = 5  # impassable
+FIELD_EMPTY        = 6  # impassable (shrinking map)
+
+PASSABLE_FIELDS = {FIELD_BASE, FIELD_NORMAL, FIELD_OBSTACLE_SLOW, FIELD_POWERUP}
 
 
 @dataclass
@@ -13,10 +25,13 @@ class Position:
     def getPosition(positionData):
         if positionData is None:
             return Position(X=0, Y=0)
-        return Position(
-            X=positionData.get("X"),
-            Y=positionData.get("Y"),
-        )
+        return Position(X=positionData.get("X", 0), Y=positionData.get("Y", 0))
+
+    def __eq__(self, other):
+        return isinstance(other, Position) and self.X == other.X and self.Y == other.Y
+
+    def __hash__(self):
+        return hash((self.X, self.Y))
 
 
 @dataclass
@@ -35,11 +50,11 @@ class Item:
         return Item(
             Id=data.get("Id"),
             Name=data.get("Name"),
-            Uses=data.get("Uses"),
-            Effect=data.get("Effect"),
-            Power=data.get("Power"),
-            Duration=data.get("Duration"),
-            ItemType=data.get("ItemType"),
+            Uses=data.get("Uses", 1),
+            Effect=data.get("Effect", ""),
+            Power=data.get("Power", 0),
+            Duration=data.get("Duration", 0),
+            ItemType=data.get("ItemType", 0),
             Range=data.get("Range"),
         )
 
@@ -54,10 +69,10 @@ class Obstacle:
     @staticmethod
     def getObstacle(data):
         return Obstacle(
-            Type=data.get("Type"),
-            Damage=data.get("Damage"),
-            Cooldown=data.get("Cooldown"),
-            CurrentCooldown=data.get("CurrentCooldown"),
+            Type=data.get("Type", 0),
+            Damage=data.get("Damage", 0),
+            Cooldown=data.get("Cooldown", 0),
+            CurrentCooldown=data.get("CurrentCooldown", 0),
         )
 
 
@@ -73,8 +88,8 @@ class Monster:
     Position: Position
     SummonedByPlayerId: Optional[int] = None
     ActiveStatuses: dict = field(default_factory=dict)
-    xPattern: list[int] = field(default_factory=list)
-    yPattern: list[int] = field(default_factory=list)
+    xPattern: list = field(default_factory=list)
+    yPattern: list = field(default_factory=list)
 
     @staticmethod
     def getMonster(data):
@@ -84,10 +99,9 @@ class Monster:
             Health=data.get("Health"),
             MaxHealth=data.get("MaxHealth"),
             AttackPower=data.get("AttackPower"),
-            AttackRange=data.get("AttackRange"),
-            MaxMoveDistance=data.get("MaxMoveDistance"),
+            AttackRange=data.get("AttackRange", 1),
+            MaxMoveDistance=data.get("MaxMoveDistance", 2),
             Position=Position.getPosition(data.get("Position")),
-
             SummonedByPlayerId=data.get("SummonedByPlayerId"),
             ActiveStatuses=data.get("ActiveStatuses", {}),
             xPattern=data.get("xPattern", []),
@@ -112,15 +126,24 @@ class MonsterCard:
         return MonsterCard(
             Id=data.get("Id"),
             Name=data.get("Name"),
-            Uses=data.get("Uses"),
-            Effect=data.get("Effect"),
-            Power=data.get("Power"),
-            OnCooldown=data.get("OnCooldown"),
-            Cooldown=data.get("Cooldown"),
-            CooldownCounter=data.get("CooldownCounter"),
-            Monster=Monster.getMonster(data.get("Monster")),
+            Uses=data.get("Uses", 1),
+            Effect=data.get("Effect", ""),
+            Power=data.get("Power", 1),
+            OnCooldown=data.get("OnCooldown", False),
+            Cooldown=data.get("Cooldown", 7),
+            CooldownCounter=data.get("CooldownCounter", 0),
+            Monster=Monster.getMonster(data.get("Monster", {})),
         )
 
+
+# Item type IDs (match C# enum)
+ITEM_NONE        = 0
+ITEM_HEALING     = 1   # Healing Potion: +50 HP
+ITEM_MOVEMENT    = 2   # Boots / Teleport stone
+ITEM_DEFENSE     = 3   # Invisibility cloak
+ITEM_UTILITY     = 4   # Magnetic / Hunter's net
+ITEM_CROWD_CTRL  = 5   # Freeze scroll / Confusion scroll
+ITEM_ATTACK      = 6   # Sword of destiny
 
 
 @dataclass
@@ -136,12 +159,12 @@ class Player:
     Xp: int
     First: bool
     Position: Position
-    Inventory: list[Item] = field(default_factory=list)
-    Cards: list[MonsterCard] = field(default_factory=list)
+    Inventory: list = field(default_factory=list)
+    Cards: list = field(default_factory=list)
     SummonedByPlayerId: Optional[int] = None
     ActiveStatuses: dict = field(default_factory=dict)
-    xPattern: list[int] = field(default_factory=list)
-    yPattern: list[int] = field(default_factory=list)
+    xPattern: list = field(default_factory=list)
+    yPattern: list = field(default_factory=list)
 
     @staticmethod
     def getPlayer(p):
@@ -151,11 +174,11 @@ class Player:
             Health=p.get("Health"),
             MaxHealth=p.get("MaxHealth"),
             AttackPower=p.get("AttackPower"),
-            AttackRange=p.get("AttackRange"),
-            MaxMoveDistance=p.get("MaxMoveDistance"),
-            Level=p.get("Level"),
-            Xp=p.get("Xp"),
-            First=p.get("First"),
+            AttackRange=p.get("AttackRange", 1),
+            MaxMoveDistance=p.get("MaxMoveDistance", 4),
+            Level=p.get("Level", 1),
+            Xp=p.get("Xp", 0),
+            First=p.get("First", False),
             Position=Position.getPosition(p.get("Position")),
             Inventory=[Item.getItem(i) for i in p.get("Inventory", [])],
             Cards=[MonsterCard.getCard(c) for c in p.get("Cards", [])],
@@ -163,10 +186,16 @@ class Player:
             ActiveStatuses=p.get("ActiveStatuses", {}),
             xPattern=p.get("xPattern", []),
             yPattern=p.get("yPattern", []),
-            ) 
+        )
 
     def getPosition(self):
         return self.Position
+
+    def is_alive(self):
+        return self.Health > 0
+
+    def has_status(self, status_name: str) -> bool:
+        return status_name in self.ActiveStatuses
 
 
 @dataclass
@@ -179,6 +208,13 @@ class Tile:
     MonsterCard: Optional[MonsterCard] = None
     Obstacle: Optional[Obstacle] = None
 
+    def is_passable(self) -> bool:
+        return self.FieldType in PASSABLE_FIELDS
+
+    def move_cost(self) -> int:
+        """Returns the movement cost to enter this tile."""
+        return 2 if self.FieldType == FIELD_OBSTACLE_SLOW else 1
+
     @staticmethod
     def getGrid(gridData):
         return [Tile.getTile(tile) for tile in gridData]
@@ -188,17 +224,13 @@ class Tile:
         entity = None
         if gridData.get("Entity") is not None:
             e = gridData.get("Entity")
-            # Players have a Level field; monsters do not
             if "Level" in e:
                 entity = Player.getPlayer(e)
-            elif "Position" in e:
+            elif e.get("Position") is not None:
                 entity = Monster.getMonster(e)
-            else:
-                entity = None
-
         return Tile(
             Position=Position.getPosition(gridData.get("Position")),
-            FieldType=gridData.get("FieldType"),
+            FieldType=gridData.get("FieldType", FIELD_NORMAL),
             Owner=gridData.get("Owner"),
             Entity=entity,
             Item=Item.getItem(gridData.get("Item")) if gridData.get("Item") else None,
@@ -207,90 +239,115 @@ class Tile:
         )
 
 
-
 @dataclass
 class Map:
-    X: int
-    Y: int
+    X: int   # width (0..X-1)
+    Y: int   # height (0..Y-1)
     Name: str
-    Grid: list[Tile] = field(default_factory=list)
+    Grid: list = field(default_factory=list)  # List[Tile]
 
     @staticmethod
     def getMap(mapData):
         return Map(
-            X=mapData.get("X"),
-            Y=mapData.get("Y"),
-            Name=mapData.get("Name"),
-            Grid=Tile.getGrid(mapData.get("Grid",[]))
+            X=mapData.get("X", 32),
+            Y=mapData.get("Y", 16),
+            Name=mapData.get("Name", ""),
+            Grid=Tile.getGrid(mapData.get("Grid", []))
         )
 
-   
+    def get_tile(self, x: int, y: int) -> Optional[Tile]:
+        """Returns the tile at (x, y), or None if out of bounds."""
+        if not (0 <= x < self.X and 0 <= y < self.Y):
+            return None
+        idx = x * self.Y + y
+        if idx < len(self.Grid):
+            return self.Grid[idx]
+        return None
+
+    def get_passable_neighbors(self, x: int, y: int) -> list:
+        """Returns list of (tile, x, y) for passable adjacent tiles."""
+        result = []
+        for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            nx, ny = x + dx, y + dy
+            tile = self.get_tile(nx, ny)
+            if tile and tile.is_passable():
+                result.append((tile, nx, ny))
+        return result
+
+
 @dataclass
 class GameBoardState:
     GameState: str
     GameId: str
     TurnCounter: int
-    Players: list[Player] = field(default_factory=list)
+    Players: list = field(default_factory=list)  # List[Player]
     Map: Optional[Map] = None
 
     @staticmethod
     def getState(data: dict) -> GameBoardState:
         return GameBoardState(
-            GameState=data.get("GameState"),
-            GameId=data.get("GameId"),
-            TurnCounter=data.get("TurnCounter"),
-            Players=[
-            Player.getPlayer(p)
-            for p in data.get("Players", {}).values()
-            ],
-            Map= Map.getMap(data.get("Map"))
+            GameState=data.get("GameState", ""),
+            GameId=data.get("GameId", ""),
+            TurnCounter=data.get("TurnCounter", 0),
+            Players=[Player.getPlayer(p) for p in data.get("Players", {}).values()],
+            Map=Map.getMap(data.get("Map")) if data.get("Map") else None
         )
 
-    def get_neighboring_tiles(self, position: Position) -> list[Tile]:
-        neighbors = []
-        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # right, down, left, up
-        for dx, dy in directions:
-            new_x = position.X + dx
-            new_y = position.Y + dy
-            if 0 <= new_x < self.Map.X and 0 <= new_y < self.Map.Y:
-                tile = self.get_tile_at_position(Position(X=new_x, Y=new_y))
-                if tile:
-                    neighbors.append(tile)
-        return neighbors
+    def clone(self) -> GameBoardState:
+        """Deep copy the board state for minimax simulation."""
+        return copy.deepcopy(self)
 
-    def getPlayerById(self, player_id):
-        if not self or not player_id:
-            return None
-        players = self.Players
-        for p in players:
+    def getPlayerById(self, player_id: int) -> Optional[Player]:
+        for p in self.Players:
             if p.Id == player_id:
                 return p
         return None
-    
-    def isMyTurn(state, player_id):
-        if not state or not player_id:
-            return False
-        players = state.Players
-        my_player = next((p for p in players if p.Id == player_id), None)
+
+    def getOpponentOf(self, player_id: int) -> Optional[Player]:
+        for p in self.Players:
+            if p.Id != player_id:
+                return p
+        return None
+
+    def get_all_monsters(self) -> list:
+        """Returns all Monster entities currently on the map."""
+        monsters = []
+        if self.Map:
+            for tile in self.Map.Grid:
+                if tile.Entity and isinstance(tile.Entity, Monster):
+                    monsters.append(tile.Entity)
+        return monsters
+
+    def get_cards_on_map(self) -> list:
+        """Returns list of (MonsterCard, x, y) for all cards on the map."""
+        cards = []
+        if self.Map:
+            for tile in self.Map.Grid:
+                if tile.MonsterCard:
+                    cards.append((tile.MonsterCard, tile.Position.X, tile.Position.Y))
+        return cards
+
+    def get_items_on_map(self) -> list:
+        """Returns list of (Item, x, y) for all items/powerups on the map."""
+        items = []
+        if self.Map:
+            for tile in self.Map.Grid:
+                if tile.Item:
+                    items.append((tile.Item, tile.Position.X, tile.Position.Y))
+        return items
+
+    def isMyTurn(self, player_id: int) -> bool:
+        my_player = self.getPlayerById(player_id)
         if not my_player:
             return False
         is_first = my_player.First
-        game_state_str = state.GameState
-        return (is_first and game_state_str == 'Player1Turn') or (not is_first and game_state_str == 'Player2Turn')
+        return (is_first and self.GameState == 'Player1Turn') or \
+               (not is_first and self.GameState == 'Player2Turn')
 
-    def isGameOver(state):
-        if not state.GameState:
-            return False
-        return state.GameState == "Ending"
+    def isGameOver(self) -> bool:
+        return self.GameState == "Ending"
 
     def __str__(self) -> str:
-        return f"GameState(GameState={self.GameState}, GameId={self.GameId}, TurnCounter={self.TurnCounter}, Players=[{', '.join(str(p) for p in self.Players)}], Map={self.Map})"
-    
-    def __clone__(self):
-        return GameBoardState(
-            GameState=self.GameState,
-            GameId=self.GameId,
-            TurnCounter=self.TurnCounter,
-            Players=[Player.getPlayer(p.__dict__) for p in self.Players],
-            Map=Map.getMap(self.Map.__dict__) if self.Map else None
-        )
+        player_strs = [f"P{p.Id}({p.Health}HP,Lv{p.Level})" for p in self.Players]
+        return (f"Turn={self.TurnCounter} State={self.GameState} "
+                f"Players=[{', '.join(player_strs)}]")
