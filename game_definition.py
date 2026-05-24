@@ -3,20 +3,18 @@ from typing import List, Optional, Tuple
 
 from game_algorithms.interfaces import GameState, Action, ActionsFunction, ResultFunction
 from game_algorithms.game import Game
-from models import (GameBoardState, Player, Monster, Position,
-                    ITEM_HEALING, ITEM_CROWD_CTRL, ITEM_ATTACK, ITEM_MOVEMENT)
+from models import (GameBoardState, Player, Monster, Position, Tile,
+                    ITEM_HEALING, ITEM_SCROLL, FIELD_OBSTACLE,
+                    FIELD_OBSTACLE_SLOW)
 from pathfinding import (manhattan_distance, is_in_attack_range,
-                         find_legal_move_positions, find_distance,
-                         GridNearestItemGoalTest, GridNearestCardGoalTest,
-                         find_distance_with_bfs)
+                         find_legal_move_positions)
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
 class MonsterHuntState(GameState):
     """
     Wraps GameBoardState as a GameState for the minimax engine.
-    player_to_move is the player ID (int) whose turn it is.
-    Equivalent to XOState in exercise-07.
+    `player_to_move` is the player ID (int) whose turn it is.
     """
 
     def __init__(self, board: GameBoardState, player_to_move: int) -> None:
@@ -88,23 +86,22 @@ class UseItemAction(MonsterHuntAction):
         return f"Use item '{self.item_name}' (id={self.item_id})"
 
 
-class PickupCardAction(MonsterHuntAction):
-    """Picks up a monster card from the map."""
+class PickupAction(MonsterHuntAction):
+    """Picks up a field item or card from the map."""
 
-    def __init__(self, card_id: int, card_x: int, card_y: int, card_name: str) -> None:
-        """Initializes the PickupCardAction.
+    def __init__(self, field_info: Tile) -> None:
+        """Initializes the PickupAction.
         Args:
-            card_id (int): ID of the card.
-            card_x, card_y (int): Position of the card on the map.
-            card_name (str): Card name (for display).
+            field_info (Tile): Full map tile payload to send to the server.
         """
-        self.card_id = card_id
-        self.card_x = card_x
-        self.card_y = card_y
-        self.card_name = card_name
+        self.field_info = field_info
 
     def __str__(self) -> str:
-        return f"Pickup card '{self.card_name}' at ({self.card_x}, {self.card_y})"
+        if self.field_info.Item:
+            return f"Pickup item '{self.field_info.Item.Name}' at ({self.field_info.Position.X}, {self.field_info.Position.Y})"
+        if self.field_info.MonsterCard:
+            return f"Pickup card '{self.field_info.MonsterCard.Name}' at ({self.field_info.Position.X}, {self.field_info.Position.Y})"
+        return f"Pickup field at ({self.field_info.Position.X}, {self.field_info.Position.Y})"
 
 
 class SummonAction(MonsterHuntAction):
@@ -126,11 +123,7 @@ class SummonAction(MonsterHuntAction):
         return f"Summon '{self.card_name}' at ({self.summon_x}, {self.summon_y})"
 
 
-class SkipAction(MonsterHuntAction):
-    """Skips the turn — used as a fallback when no better action exists."""
-
-    def __str__(self) -> str:
-        return "Skip turn"
+# SkipAction removed: skipping is not a legal move in the game
 
 
 # ─── Actions Function ─────────────────────────────────────────────────────────
@@ -143,8 +136,7 @@ MAX_MOVE_CANDIDATES = 8
 class MonsterHuntActionsFunction(ActionsFunction):
     """
     Returns all legal actions for the current player in the Monster Hunt game.
-    Priority order: attack > use healing item > summon > move > pickup card > skip.
-    Equivalent to XOActionsFunction in exercise-07.
+    Priority order: attack > use healing item > summon > pickup > move.
     """
 
     def actions(self, game_state: MonsterHuntState) -> List[MonsterHuntAction]:
@@ -157,9 +149,20 @@ class MonsterHuntActionsFunction(ActionsFunction):
         board: GameBoardState = game_state.state
         me: Player = board.getPlayerById(game_state.player_to_move)
         if not me or not board.Map:
-            return [SkipAction()]
+            return []
 
         actions = []
+
+        # If we picked up items last turn, force using them this turn (use-scroll behavior)
+        if me.RecentlyPickedItems:
+            use_actions = []
+            for item_id in list(me.RecentlyPickedItems):
+                for item in me.Inventory:
+                    if item.Id == item_id:
+                        use_actions.append(UseItemAction(item.Id, item.Name))
+                        break
+            if use_actions:
+                return use_actions
 
         # 1. ATTACK — if any enemy is within attack range, add attack actions
         opp = board.getOpponentOf(me.Id)
@@ -169,18 +172,26 @@ class MonsterHuntActionsFunction(ActionsFunction):
                                   me.AttackRange):
                 actions.append(AttackAction(opp.Id, opp.Position.X, opp.Position.Y))
 
-        # Attack opponent's monsters too
-        for monster in board.get_all_monsters():
-            if monster.SummonedByPlayerId != me.Id:  # not my own monster
-                if is_in_attack_range(me.Position.X, me.Position.Y,
-                                      monster.Position.X, monster.Position.Y,
-                                      me.AttackRange):
-                    actions.append(AttackAction(monster.Id,
-                                                monster.Position.X, monster.Position.Y))
+        # # Attack opponent's monsters too
+        # for monster in board.get_all_monsters():
+        #     if monster.SummonedByPlayerId != me.Id:  # not my own monster
+        #         if is_in_attack_range(me.Position.X, me.Position.Y,
+        #                               monster.Position.X, monster.Position.Y,
+        #                               me.AttackRange):
+        #             actions.append(AttackAction(monster.Id,
+        #                                         monster.Position.X, monster.Position.Y))
 
-        # 2. USE ITEM — healing items are valuable (use when low on HP)
+        # 2. USE ITEM — healing potions only when HP < 50; other items available
         for item in me.Inventory:
-            actions.append(UseItemAction(item.Id, item.Name))
+            try:
+                if item.ItemType == ITEM_HEALING:
+                    if me.Health < 50:
+                        actions.append(UseItemAction(item.Id, item.Name))
+                else:
+                    actions.append(UseItemAction(item.Id, item.Name))
+            except AttributeError:
+                # Malformed item object: offer use action conservatively
+                actions.append(UseItemAction(item.Id, getattr(item, 'Name', 'item')))
 
         # 3. SUMMON — if we have cards ready (not on cooldown)
         if board.Map:
@@ -192,17 +203,23 @@ class MonsterHuntActionsFunction(ActionsFunction):
                         actions.append(SummonAction(card.Id, nx, ny, card.Name))
                         break  # one summon position per card to limit branching
 
-        # 4. PICKUP CARD — if adjacent to a card on the map
-        for card, cx, cy in board.get_cards_on_map():
-            if manhattan_distance(me.Position.X, me.Position.Y, cx, cy) <= 1:
-                actions.append(PickupCardAction(card.Id, cx, cy, card.Name))
+        # 4. PICKUP — if adjacent to a field item or card on the map
+        pickup_actions = []
+        for tile in board.Map.Grid:
+            if (tile.Item or tile.MonsterCard) and manhattan_distance(
+                    me.Position.X, me.Position.Y, tile.Position.X, tile.Position.Y) <= 1:
+                pickup_actions.append(PickupAction(tile))
+
+        # If there are pickup actions available, prioritize them over movement
+        if pickup_actions:
+            actions.extend(pickup_actions)
+            return actions
 
         # 5. MOVE — find best movement candidates
         move_actions = self._get_move_actions(me, opp, board)
         actions.extend(move_actions)
 
-        # 6. SKIP — always available as fallback
-        actions.append(SkipAction())
+        # 6. SKIP removed — skipping is not a legal action
 
         return actions
 
@@ -269,6 +286,13 @@ class MonsterHuntActionsFunction(ActionsFunction):
             if tile and tile.Item:
                 score -= 100.0  # item tiles are not legal move destinations
 
+            # Prefer safer tiles over obstacle / slow-obstacle tiles.
+            if tile:
+                if tile.FieldType == FIELD_OBSTACLE_SLOW:
+                    score -= 18.0
+                elif tile.FieldType == FIELD_OBSTACLE:
+                    score -= 8.0
+
             # Prefer tiles adjacent to items, since pickup happens from a neighboring tile
             for item, ix, iy in board.get_items_on_map():
                 dist = manhattan_distance(x, y, ix, iy)
@@ -296,7 +320,6 @@ class MonsterHuntResultFunction(ResultFunction):
     """
     Simulates the effect of an action on the game state.
     Used by the minimax engine to explore the game tree.
-    Equivalent to XOResultFunction in exercise-07.
     """
 
     def result(self, game_state: MonsterHuntState, action: MonsterHuntAction) -> MonsterHuntState:
@@ -334,20 +357,41 @@ class MonsterHuntResultFunction(ResultFunction):
                 if item.Id == action.item_id:
                     if item.ItemType == ITEM_HEALING:
                         me.Health = min(me.MaxHealth, me.Health + HEALING_POTION_HP)
+                    # Scrolls and other items: we model scrolls as immediate-use effects
+                    # For now, assume scrolls have effects outside healing; we remove them
+                    # and rely on game rules / server to resolve effects where necessary.
                     # Other items (crowd control, attack buffs) are complex;
                     # for minimax we just model healing precisely
+                    # remove the item from inventory
                     me.Inventory.remove(item)
+                    # clear from RecentlyPickedItems if it was scheduled for use
+                    if item.Id in me.RecentlyPickedItems:
+                        try:
+                            me.RecentlyPickedItems.remove(item.Id)
+                        except ValueError:
+                            pass
                     break
 
-        elif isinstance(action, PickupCardAction):
-            # Remove card from map tile, add to player's hand
-            if new_board.Map:
+        elif isinstance(action, PickupAction):
+            # Remove item/card from matching map tile and add it to the player.
+            if new_board.Map and action.field_info and action.field_info.Position:
                 for tile in new_board.Map.Grid:
-                    if (tile.MonsterCard and tile.MonsterCard.Id == action.card_id
-                            and tile.Position.X == action.card_x
-                            and tile.Position.Y == action.card_y):
-                        me.Cards.append(tile.MonsterCard)
-                        tile.MonsterCard = None
+                    if (tile.Position.X == action.field_info.Position.X
+                            and tile.Position.Y == action.field_info.Position.Y):
+                        if tile.Item is not None:
+                            me.Inventory.append(tile.Item)
+                            # schedule use next turn if it's a scroll
+                            try:
+                                if tile.Item.ItemType == ITEM_SCROLL:
+                                    if tile.Item.Id not in me.RecentlyPickedItems:
+                                        me.RecentlyPickedItems.append(tile.Item.Id)
+                            except NameError:
+                                # ITEM_SCROLL may not be defined; ignore if so
+                                pass
+                            tile.Item = None
+                        elif tile.MonsterCard is not None:
+                            me.Cards.append(tile.MonsterCard)
+                            tile.MonsterCard = None
                         break
 
         elif isinstance(action, SummonAction):
@@ -371,7 +415,6 @@ class MonsterHuntGame(Game):
     """
     Monster Hunt game using minimax with alpha-beta pruning.
     Our agent is the maximizing player.
-    Equivalent to XOGame in exercise-07.
     """
 
     def __init__(self, actions_function, result_function,
@@ -407,12 +450,11 @@ class MonsterHuntGame(Game):
         Higher value = better for our agent.
 
         Components:
-          1. HP ratio difference   — most important (mirrors win condition)
-          2. Level / XP advantage  — more XP = stronger player
-          3. Item advantage        — healing items can save a fight
-          4. Card / monster value  — summoned monsters deal damage
-          5. Attack opportunity    — being in range to attack next turn
-          6. Proximity to items    — more items = future advantage
+                    1. HP ratio difference   — most important (mirrors win condition)
+                    2. Item advantage        — healing items can save a fight
+                    3. Card / monster value  — summoned monsters deal damage
+                    4. Attack opportunity    — being in range to attack next turn
+                    5. Proximity to items    — more items = future advantage
 
         Args:
             game_state (MonsterHuntState): The current game state.
@@ -441,11 +483,7 @@ class MonsterHuntGame(Game):
         if not opp.is_alive():
             return +10000.0
 
-        # 2. Level / XP advantage
-        utility += (me.Level - opp.Level) * 30.0
-        utility += (me.Xp - opp.Xp) * 0.5
-
-        # 3. Item advantage (count healing items especially)
+        # 2. Item advantage (count healing items especially)
         for item in me.Inventory:
             if item.ItemType == ITEM_HEALING:
                 utility += 25.0
@@ -457,22 +495,22 @@ class MonsterHuntGame(Game):
             else:
                 utility -= 8.0
 
-        # 4. Card advantage (ready-to-summon cards)
+        # 3. Card advantage (ready-to-summon cards)
         for card in me.Cards:
             if not card.OnCooldown:
-                utility += 15.0
+                utility += 20.0 # 15
         for card in opp.Cards:
             if not card.OnCooldown:
-                utility -= 12.0
+                utility -= 15.0 # 12
 
-        # 5. Attack opportunity (am I in range to attack opponent?)
+        # 4. Attack opportunity (am I in range to attack opponent?)
         if board.Map:
             if is_in_attack_range(me.Position.X, me.Position.Y,
                                   opp.Position.X, opp.Position.Y,
                                   me.AttackRange):
                 utility += 20.0  # can attack next turn
 
-            # 6. Proximity to items on map (closer = more likely to grab them)
+            # 5. Proximity to items on map (closer = more likely to grab them)
             for item, ix, iy in board.get_items_on_map():
                 my_dist  = manhattan_distance(me.Position.X, me.Position.Y, ix, iy)
                 opp_dist = manhattan_distance(opp.Position.X, opp.Position.Y, ix, iy)

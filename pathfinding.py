@@ -4,8 +4,7 @@ from search_algorithms.interfaces import (State, Action, ActionsFunction, Result
                                           GoalTestFunction, StepCostFunction, HeuristicFunction)
 from search_algorithms.problem import Problem
 from search_algorithms.astar import AStar
-from search_algorithms.bfs import BFS
-from models import Map, Tile, FIELD_OBSTACLE_SLOW
+from models import Map, Tile, FIELD_OBSTACLE, FIELD_OBSTACLE_SLOW
 
 
 # ─── Search State ─────────────────────────────────────────────────────────────
@@ -155,8 +154,14 @@ class GridStepCost(StepCostFunction):
             float: Movement cost (1 or 2).
         """
         tile = self.game_map.get_tile(state1.x, state1.y)
-        if tile and tile.FieldType == FIELD_OBSTACLE_SLOW:
+        if not tile:
+            return 999999
+        if tile.FieldType == FIELD_OBSTACLE_SLOW:
             return 2
+        if tile.FieldType == FIELD_OBSTACLE:
+            return 999999
+        if not tile.is_passable():
+            return 999999
         return 1
 
 
@@ -244,62 +249,6 @@ def find_path(game_map: Map, start_x: int, start_y: int,
     return actions
 
 
-def find_distance(game_map: Map, start_x: int, start_y: int,
-                  goal_x: int, goal_y: int,
-                  blocked: Set[Tuple[int, int]] = None) -> Optional[int]:
-    """Returns the shortest path length (in move actions), or None if unreachable.
-    Args:
-        game_map (Map): The game map.
-        start_x, start_y: Starting position.
-        goal_x, goal_y: Goal position.
-        blocked (Set): Extra blocked positions.
-    Returns:
-        Optional[int]: Number of steps, or None if unreachable.
-    """
-    path = find_path(game_map, start_x, start_y, goal_x, goal_y, blocked)
-    return len(path) if path is not None else None
-
-
-def find_reachable_positions(game_map: Map, start_x: int, start_y: int,
-                              max_move_distance: int,
-                              blocked: Set[Tuple[int, int]] = None) -> Set[Tuple[int, int]]:
-    """
-    BFS to find all positions reachable within max_move_distance movement cost.
-    Respects tile movement costs (OBSTACLE_SLOW costs 2).
-
-    Args:
-        game_map (Map): The game map.
-        start_x, start_y: Starting position.
-        max_move_distance (int): Maximum total movement cost.
-        blocked (Set): Extra blocked positions (e.g. entities).
-    Returns:
-        Set[Tuple[int, int]]: All reachable (x, y) positions.
-    """
-    from collections import deque
-    blocked = blocked or set()
-    reachable = set()
-    # queue: (x, y, cost_used)
-    queue = deque([(start_x, start_y, 0)])
-    visited = {(start_x, start_y): 0}  # position → min cost to reach
-
-    while queue:
-        x, y, cost = queue.popleft()
-        reachable.add((x, y))
-
-        for _, nx, ny in game_map.get_passable_neighbors(x, y):
-            if (nx, ny) in blocked:
-                continue
-            tile = game_map.get_tile(nx, ny)
-            step = 2 if (tile and tile.FieldType == FIELD_OBSTACLE_SLOW) else 1
-            new_cost = cost + step
-            if new_cost <= max_move_distance:
-                if (nx, ny) not in visited or visited[(nx, ny)] > new_cost:
-                    visited[(nx, ny)] = new_cost
-                    queue.append((nx, ny, new_cost))
-
-    return reachable
-
-
 def find_legal_move_positions(game_map: Map, start_x: int, start_y: int,
                               max_move_distance: int,
                               blocked: Set[Tuple[int, int]] = None) -> Set[Tuple[int, int]]:
@@ -314,66 +263,24 @@ def find_legal_move_positions(game_map: Map, start_x: int, start_y: int,
     reachable = set()
 
     for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+        spent = 0
         for step in range(1, max_move_distance + 1):
             nx = start_x + dx * step
             ny = start_y + dy * step
             tile = game_map.get_tile(nx, ny)
-            if not tile or not tile.is_passable() or tile.Item is not None or (nx, ny) in blocked:
+            if not tile or (nx, ny) in blocked:
+                break
+            if tile.FieldType == FIELD_OBSTACLE:
+                break
+            if not tile.is_passable():
+                break
+            step_cost = 2 if tile.FieldType == FIELD_OBSTACLE_SLOW else 1
+            spent += step_cost
+            if spent > max_move_distance:
                 break
             reachable.add((nx, ny))
 
     return reachable
 
 
-def find_distance_with_bfs(game_map: Map, start_x: int, start_y: int,
-                            goal_test: GoalTestFunction,
-                            blocked: Set[Tuple[int, int]] = None) -> Optional[int]:
-    """
-    BFS distance to the nearest tile that satisfies a goal test.
-    Useful for finding nearest item, card, etc.
 
-    Args:
-        game_map (Map): The game map.
-        start_x, start_y: Starting position.
-        goal_test: A GoalTestFunction that returns True for the target tile(s).
-        blocked (Set): Extra blocked positions.
-    Returns:
-        Optional[int]: Distance to nearest matching tile, or None.
-    """
-    initial_state = GridPosition(start_x, start_y)
-    problem = Problem(
-        initial_state=initial_state,
-        actions_function=GridActionsFunction(game_map, blocked),
-        result_function=GridResultFunction(),
-        goal_test=goal_test,
-        step_cost_function=GridStepCost(game_map),
-        heuristic_function=None
-    )
-    # BFS doesn't need heuristic - use it when heuristic_function is None
-    from collections import deque
-    from search_algorithms.node import Node
-
-    node = Node(initial_state)
-    if problem.goal_test.is_goal_state(node.state):
-        return 0
-    frontier = deque([node])
-    explored = set()
-    dist = {(start_x, start_y): 0}
-
-    while frontier:
-        node = frontier.popleft()
-        explored.add(node.state)
-        cur_dist = dist.get((node.state.x, node.state.y), 0)
-
-        for action in problem.actions_function.actions(node.state):
-            child_state = problem.result_function.result(node.state, action)
-            if child_state in explored:
-                continue
-            child_dist = cur_dist + 1
-            if problem.goal_test.is_goal_state(child_state):
-                return child_dist
-            if child_state not in explored:
-                dist[(child_state.x, child_state.y)] = child_dist
-                frontier.append(Node(child_state, node, action))
-
-    return None

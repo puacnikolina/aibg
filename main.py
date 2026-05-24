@@ -8,12 +8,11 @@ import requests
 import sys
 import time
 
-import models as stateObj
-from models import GameBoardState
+from models import GameBoardState, ITEM_SCROLL
 from game_definition import (MonsterHuntState, MonsterHuntGame,
                               MonsterHuntActionsFunction, MonsterHuntResultFunction,
                               MoveAction, AttackAction, UseItemAction,
-                              PickupCardAction, SummonAction, SkipAction)
+                              PickupAction, SummonAction)
 from agent import AIAgent
 
 
@@ -33,6 +32,9 @@ class BotClient:
         self.game_id = game_id
         self.bot_name = bot_name
         self.player_id = None
+        # Last PUT response info (status code and text) for diagnostics
+        self.last_put_status = None
+        self.last_put_text = None
 
     def get_game_state(self) -> dict:
         """Fetches and returns the current game state as a dict.
@@ -105,17 +107,17 @@ class BotClient:
                f"/use-item/{item_id}/gameId/{self.game_id}")
         return self._put(url, None)
 
-    def send_pickup_card(self, player_id: int, card_x: int, card_y: int) -> dict:
-        """Sends a pickup-card action to the server.
+    def send_pickup(self, player_id: int, field_info) -> dict:
+        """Sends a pickup action to the server.
         Args:
             player_id (int): Our player's ID.
-            card_x, card_y (int): Position of the card to pick up.
+            field_info: Full field payload to pick up from.
         Returns:
             dict: Updated game state from server response.
         """
-        # PUT /map/pickup/{playerId}/gameId/{gameId}
-        url = f"{self.server_url}/map/pickup/{player_id}/gameId/{self.game_id}"
-        payload = {"Position": {"X": card_x, "Y": card_y}}
+        # PUT /player/pickup/{playerId}/gameId/{gameId}
+        url = f"{self.server_url}/player/pickup/{player_id}/gameId/{self.game_id}"
+        payload = field_info.to_dict() if hasattr(field_info, "to_dict") else field_info
         return self._put(url, payload)
 
     def send_summon(self, player_id: int, card_id: int,
@@ -147,13 +149,20 @@ class BotClient:
                 response = requests.put(url, json=payload, timeout=10)
             else:
                 response = requests.put(url, timeout=10)
-
             if response.status_code == 200:
+                # clear last status on success
+                self.last_put_status = 200
+                self.last_put_text = None
                 return response.json()
             else:
+                self.last_put_status = response.status_code
+                self.last_put_text = response.text
                 print(f"[API] PUT {url} failed: {response.status_code} — {response.text}")
         except Exception as e:
             print(f"[API] PUT error: {e}")
+            # network errors treated as transient
+            self.last_put_status = None
+            self.last_put_text = str(e)
         return None
 
 
@@ -179,17 +188,17 @@ def execute_action(action, client: BotClient) -> dict:
         print(f"[Bot] → Use item '{action.item_name}' (id={action.item_id})")
         return client.send_use_item(client.player_id, action.item_id)
 
-    elif isinstance(action, PickupCardAction):
-        print(f"[Bot] → Pickup card '{action.card_name}'")
-        return client.send_pickup_card(client.player_id, action.card_x, action.card_y)
+    elif isinstance(action, PickupAction):
+        print(f"[Bot] → {action}")
+        return client.send_pickup(client.player_id, action.field_info)
 
     elif isinstance(action, SummonAction):
         print(f"[Bot] → Summon '{action.card_name}' at ({action.summon_x}, {action.summon_y})")
         return client.send_summon(client.player_id, action.card_id,
                                   action.summon_x, action.summon_y)
 
-    elif isinstance(action, SkipAction):
-        print("[Bot] → Skip turn (no action)")
+    if action is None:
+        print("[Bot] → No legal action (skipping)")
         return None
 
     print(f"[Bot] Unknown action type: {type(action)}")
@@ -265,17 +274,57 @@ def main():
             # ── Our turn: run minimax and execute action ───────────────────
             print(f"\n[Turn {board.TurnCounter}] {board}")
             current_state = MonsterHuntState(board, my_id)
+            # Inject locally remembered pickups so the next-turn scroll use rule is visible to minimax.
+            try:
+                my_player = current_state.state.getPlayerById(my_id)
+                if my_player is not None:
+                    my_player.RecentlyPickedItems = list(agent.recently_picked_items)
+            except Exception:
+                pass
             action = agent.make_move(current_state)
 
             response = execute_action(action, client)
 
-            # Server returns updated state in response — no need for extra GET
-            if response:
-                # Small delay to avoid hammering the server
-                time.sleep(0.1)
-            else:
-                # Fallback: wait and try again
-                time.sleep(0.5)
+            # If the action failed (e.g., 409 Not Your Turn or server error), poll server until state changes
+            if response is None:
+                prev_turn = board.TurnCounter
+                # Wait for server to process or advance the turn. Poll for up to ~8 seconds.
+                waited = 0.0
+                poll_interval = 0.5
+                max_wait = 8.0
+                while waited < max_wait:
+                    raw_state = client.get_game_state()
+                    if raw_state:
+                        new_board = GameBoardState.getState(raw_state)
+                        # If turn advanced or it's no longer our turn, stop waiting
+                        if new_board.TurnCounter != prev_turn or not new_board.isMyTurn(my_id):
+                            board = new_board
+                            break
+                    time.sleep(poll_interval)
+                    waited += poll_interval
+                # After polling, continue main loop (will recompute action if it's still our turn)
+                continue
+
+            # On success, update agent-side recently-picked bookkeeping
+            if isinstance(action, PickupAction):
+                # If we picked up a scroll, schedule it for use next turn
+                try:
+                    if action.field_info and action.field_info.Item and action.field_info.Item.ItemType == ITEM_SCROLL:
+                        if action.field_info.Item.Id not in agent.recently_picked_items:
+                            agent.recently_picked_items.append(action.field_info.Item.Id)
+                except Exception:
+                    pass
+
+            if isinstance(action, UseItemAction):
+                # If we used a scheduled item, remove it from the schedule
+                try:
+                    if action.item_id in agent.recently_picked_items:
+                        agent.recently_picked_items.remove(action.item_id)
+                except ValueError:
+                    pass
+
+            # Server returned updated state; small delay to avoid hammering
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("\n[Bot] Stopped by user.")

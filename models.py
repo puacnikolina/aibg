@@ -8,12 +8,17 @@ from typing import Optional, Union
 FIELD_BASE         = 0
 FIELD_NORMAL       = 1
 FIELD_OBSTACLE_SLOW = 2  # Snow: +1 movement cost
-FIELD_OBSTACLE     = 3  # Ice Spikes: 10 DMG, impassable
+FIELD_OBSTACLE     = 3  # Ice Spikes: 10 DMG
 FIELD_POWERUP      = 4
 FIELD_WALL         = 5  # impassable
 FIELD_EMPTY        = 6  # impassable (shrinking map)
 
-PASSABLE_FIELDS = {FIELD_BASE, FIELD_NORMAL, FIELD_OBSTACLE_SLOW, FIELD_POWERUP}
+PASSABLE_FIELDS = {FIELD_NORMAL, FIELD_OBSTACLE_SLOW}
+MOVEMENT_COST_FIELDS = {
+    FIELD_NORMAL: 1,
+    FIELD_OBSTACLE_SLOW: 2,
+    FIELD_OBSTACLE: 1,
+}
 
 
 @dataclass
@@ -32,6 +37,12 @@ class Position:
 
     def __hash__(self):
         return hash((self.X, self.Y))
+
+    def to_dict(self) -> dict:
+        return {
+            "X": self.X,
+            "Y": self.Y,
+        }
 
 
 @dataclass
@@ -58,6 +69,18 @@ class Item:
             Range=data.get("Range"),
         )
 
+    def to_dict(self) -> dict:
+        return {
+            "Id": self.Id,
+            "Name": self.Name,
+            "Uses": self.Uses,
+            "Effect": self.Effect,
+            "Power": self.Power,
+            "Duration": self.Duration,
+            "ItemType": self.ItemType,
+            "Range": self.Range,
+        }
+
 
 @dataclass
 class Obstacle:
@@ -74,6 +97,14 @@ class Obstacle:
             Cooldown=data.get("Cooldown", 0),
             CurrentCooldown=data.get("CurrentCooldown", 0),
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "Type": self.Type,
+            "Damage": self.Damage,
+            "Cooldown": self.Cooldown,
+            "CurrentCooldown": self.CurrentCooldown,
+        }
 
 
 @dataclass
@@ -108,6 +139,22 @@ class Monster:
             yPattern=data.get("yPattern", []),
         )
 
+    def to_dict(self) -> dict:
+        return {
+            "Id": self.Id,
+            "Name": self.Name,
+            "Health": self.Health,
+            "MaxHealth": self.MaxHealth,
+            "AttackPower": self.AttackPower,
+            "AttackRange": self.AttackRange,
+            "MaxMoveDistance": self.MaxMoveDistance,
+            "Position": self.Position.to_dict() if self.Position else None,
+            "SummonedByPlayerId": self.SummonedByPlayerId,
+            "ActiveStatuses": self.ActiveStatuses,
+            "xPattern": self.xPattern,
+            "yPattern": self.yPattern,
+        }
+
 
 @dataclass
 class MonsterCard:
@@ -135,15 +182,23 @@ class MonsterCard:
             Monster=Monster.getMonster(data.get("Monster", {})),
         )
 
+    def to_dict(self) -> dict:
+        return {
+            "Id": self.Id,
+            "Name": self.Name,
+            "Uses": self.Uses,
+            "Effect": self.Effect,
+            "Power": self.Power,
+            "OnCooldown": self.OnCooldown,
+            "Cooldown": self.Cooldown,
+            "CooldownCounter": self.CooldownCounter,
+            "Monster": self.Monster.to_dict() if hasattr(self.Monster, "to_dict") else None,
+        }
+
 
 # Item type IDs (match C# enum)
-ITEM_NONE        = 0
 ITEM_HEALING     = 1   # Healing Potion: +50 HP
-ITEM_MOVEMENT    = 2   # Boots / Teleport stone
-ITEM_DEFENSE     = 3   # Invisibility cloak
-ITEM_UTILITY     = 4   # Magnetic / Hunter's net
-ITEM_CROWD_CTRL  = 5   # Freeze scroll / Confusion scroll
-ITEM_ATTACK      = 6   # Sword of destiny
+ITEM_SCROLL      = 5   # CrowdControl items (freeze/confusion scrolls)
 
 
 @dataclass
@@ -155,12 +210,13 @@ class Player:
     AttackPower: int
     AttackRange: int
     MaxMoveDistance: int
-    Level: int
-    Xp: int
+    First: bool
     First: bool
     Position: Position
     Inventory: list = field(default_factory=list)
     Cards: list = field(default_factory=list)
+    # IDs of items picked up on the previous turn; used to force-use them next turn
+    RecentlyPickedItems: list = field(default_factory=list)
     SummonedByPlayerId: Optional[int] = None
     ActiveStatuses: dict = field(default_factory=dict)
     xPattern: list = field(default_factory=list)
@@ -176,12 +232,11 @@ class Player:
             AttackPower=p.get("AttackPower"),
             AttackRange=p.get("AttackRange", 1),
             MaxMoveDistance=p.get("MaxMoveDistance", 4),
-            Level=p.get("Level", 1),
-            Xp=p.get("Xp", 0),
             First=p.get("First", False),
             Position=Position.getPosition(p.get("Position")),
             Inventory=[Item.getItem(i) for i in p.get("Inventory", [])],
             Cards=[MonsterCard.getCard(c) for c in p.get("Cards", [])],
+            RecentlyPickedItems=p.get("RecentlyPickedItems", []),
             SummonedByPlayerId=p.get("SummonedByPlayerId"),
             ActiveStatuses=p.get("ActiveStatuses", {}),
             xPattern=p.get("xPattern", []),
@@ -197,6 +252,25 @@ class Player:
     def has_status(self, status_name: str) -> bool:
         return status_name in self.ActiveStatuses
 
+    def to_dict(self) -> dict:
+        return {
+            "Id": self.Id,
+            "Name": self.Name,
+            "Health": self.Health,
+            "MaxHealth": self.MaxHealth,
+            "AttackPower": self.AttackPower,
+            "AttackRange": self.AttackRange,
+            "MaxMoveDistance": self.MaxMoveDistance,
+            "First": self.First,
+            "Position": self.Position.to_dict() if self.Position else None,
+            "Inventory": [item.to_dict() for item in self.Inventory],
+            "Cards": [card.to_dict() for card in self.Cards],
+            "SummonedByPlayerId": self.SummonedByPlayerId,
+            "ActiveStatuses": self.ActiveStatuses,
+            "xPattern": self.xPattern,
+            "yPattern": self.yPattern,
+        }
+
 
 @dataclass
 class Tile:
@@ -211,10 +285,6 @@ class Tile:
     def is_passable(self) -> bool:
         return self.FieldType in PASSABLE_FIELDS
 
-    def move_cost(self) -> int:
-        """Returns the movement cost to enter this tile."""
-        return 2 if self.FieldType == FIELD_OBSTACLE_SLOW else 1
-
     @staticmethod
     def getGrid(gridData):
         return [Tile.getTile(tile) for tile in gridData]
@@ -224,7 +294,9 @@ class Tile:
         entity = None
         if gridData.get("Entity") is not None:
             e = gridData.get("Entity")
-            if "Level" in e:
+            # Player entities contain the 'First' flag; monsters have a Position but
+            # do not include the player-specific 'First' field.
+            if "First" in e:
                 entity = Player.getPlayer(e)
             elif e.get("Position") is not None:
                 entity = Monster.getMonster(e)
@@ -237,6 +309,17 @@ class Tile:
             MonsterCard=MonsterCard.getCard(gridData.get("MonsterCard")) if gridData.get("MonsterCard") else None,
             Obstacle=Obstacle.getObstacle(gridData.get("Obstacle")) if gridData.get("Obstacle") else None,
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "Position": self.Position.to_dict() if self.Position else None,
+            "Entity": self.Entity.to_dict() if hasattr(self.Entity, "to_dict") and self.Entity else None,
+            "FieldType": self.FieldType,
+            "Owner": self.Owner.to_dict() if hasattr(self.Owner, "to_dict") and self.Owner else self.Owner,
+            "Item": self.Item.to_dict() if self.Item else None,
+            "MonsterCard": self.MonsterCard.to_dict() if self.MonsterCard else None,
+            "Obstacle": self.Obstacle.to_dict() if self.Obstacle else None,
+        }
 
 
 @dataclass
@@ -348,6 +431,6 @@ class GameBoardState:
         return self.GameState == "Ending"
 
     def __str__(self) -> str:
-        player_strs = [f"P{p.Id}({p.Health}HP,Lv{p.Level})" for p in self.Players]
+        player_strs = [f"P{p.Id}({p.Health}HP)" for p in self.Players]
         return (f"Turn={self.TurnCounter} State={self.GameState} "
                 f"Players=[{', '.join(player_strs)}]")

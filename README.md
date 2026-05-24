@@ -1,4 +1,4 @@
-# Monster Hunt Bot - API Dokumentacija
+# Monster Hunt Bot - Dokumentacija
 
 ## Preuzimanje sa Git Repozitorijuma
 
@@ -9,7 +9,6 @@ git clone https://github.com/ParadoxBosmer/TEST-BOT.git
 ```
 Unutra postoje modeli koji vam mogu poslužiti za rad kao i kosturi za dozvoljene programske jezike. 
 
----
 
 ## Objašnjenje toka poteza
 
@@ -72,11 +71,11 @@ Koristi item iz inventara.
 
 ---
 
-### 4. PUT /map/pickup/{playerId}/gameId/{gameId}
+### 4. PUT /player/pickup/{playerId}/gameId/{gameId}
 
 Pokupite karticu sa mape.
 
-**URL**: `PUT http://localhost:8080/map/pickup/{playerId}/gameId/{gameId}`
+**URL**: `PUT http://localhost:8080/player/pickup/{playerId}/gameId/{gameId}`
 
 **Request Body**:
 ```json
@@ -117,9 +116,111 @@ Prizovite monstruma iz kartice.
 }
 ```
 
+# FieldInfo Dokumentacija
+
+## Struktura FieldInfo
+
+```csharp
+public class FieldInfo
+{
+    public Position? Position;
+    [JsonProperty(TypeNameHandling = TypeNameHandling.Auto)]
+    public Entity? Entity;
+    public Field FieldType;
+    public Player? Owner;
+    public Item? Item;
+    public MonsterCard? MonsterCard;
+    public Obstacle? Obstacle;
+}
+```
+
+### Svojstva:
+- **Position**: Koordinate polja (X, Y)
+- **Entity**: Bilo koji entitet na tom polju (igrač/čudovište)
+- **FieldType**: Tip polja (NORMAL, itd.)
+- **Owner**: Igrač koji poseduje polje
+- **Item**: Predmet prisutan na polju
+- **MonsterCard**: Karta čudovišta na polju
+- **Obstacle**: Bilo koja prepreka
+
+## Kako se poziva
+
+### 1. MapController - PickUpCard
+```csharp
+[HttpPut("pickup/{playerId}/gameId/{gameId}")]
+public async Task<IActionResult> PickUpCard(
+    [FromRoute] int playerId, 
+    [FromRoute] string gameId,
+    [FromBody] FieldInfo fieldInfo, 
+    CancellationToken cancellationToken)
+{
+    _playerServices.PickupCard(gameId, playerId, fieldInfo);
+}
+```
+
+### 2. PlayerController - PickUpItem
+```csharp
+[HttpPut("pickup/{playerId}/gameId/{gameId}")]
+public async Task<IActionResult> PickUpItem(
+    [FromRoute] string gameId,
+    [FromBody] FieldInfo fieldInfo, 
+    [FromRoute] int playerId, 
+    CancellationToken cancellationToken)
+{
+    _playerServices.PickupItem(gameId, player.Id, fieldInfo);
+}
+```
+
+## Primer strukture povratka
+
+Kada se vraća kao JSON, FieldInfo izgleda ovako:
+
+```json
+{
+  "Position": {
+    "X": 5,
+    "Y": 3
+  },
+  "Entity": null,
+  "FieldType": "NORMAL",
+  "Owner": null,
+  "Item": {
+    "ItemType": "HEALTH_POTION",
+    "Value": 50
+  },
+  "MonsterCard": null,
+  "Obstacle": null
+}
+```
+
+Ili sa entitetom:
+
+```json
+{
+  "Position": {
+    "X": 2,
+    "Y": 7
+  },
+  "Entity": {
+    "$type": "Player",
+    "Id": 1,
+    "Name": "PlayerOne",
+    "Health": 100
+  },
+  "FieldType": "NORMAL",
+  "Owner": {
+    "Id": 1,
+    "Name": "PlayerOne"
+  },
+  "Item": null,
+  "MonsterCard": null,
+  "Obstacle": null
+}
+```
+
 ---
 
-## Podaci za Strategiju
+## Sadržajmape
 
 **Svaki PUT endpoint automatski vraća kompletno stanje igre** koje sadrži:
 
@@ -145,43 +246,52 @@ Lista svih polja na mapi sa informacijama o preprekama:
 
 ### Python
 ```bash
-cd python
 pip install requests
 python bot_template.py http://localhost:8080 game123 MojBot
 ```
 
 ### JavaScript
 ```bash
-cd javascript
+
 npm install axios
 node bot_template.js http://localhost:8080 game123 MojBot
 ```
 
 ### C#
 ```bash
-cd csharp
 dotnet run http://localhost:8080 game123 MojBot
 ```
 
 ### Java
 ```bash
-cd java
 mvn clean package
 java -jar target/bot-template-1.0-SNAPSHOT.jar http://localhost:8080 game123 MojBot
 ```
 
 ### Go
 ```bash
-cd go
 go run bot_template.go http://localhost:8080 game123 MojBot
 ```
 
 ### C++
 ```bash
-cd cpp
 mkdir build && cd build
 cmake ..
 make
 ./bot_template http://localhost:8080 game123 MojBot
 ```
 
+## **VAŽNO - Pravila za Predaju Fajlova**
+
+**Prilikom predaje fajlova, obavezno dodajte sufiks sa imenom programskog jezika:**
+- Format: `naziv_fajla_{programski_jezik}.ekstenzija`
+- Primeri:
+  - `bot_template_python.py`
+  - `bot_template_java.jar`
+  - `bot_template_csharp.exe`
+  - `bot_template_cplusplus.exe`
+  - `bot_template_javascript.js`
+  - `bot_template_cpp.exe`
+  - `bot_template_go.exe`
+
+---
